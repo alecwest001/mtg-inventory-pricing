@@ -1,0 +1,12 @@
+config.ini
+
+Data/
+build/
+dist/
+debug/
+
+Test Update Failure/
+Test Update Success/
+
+__pycache__/
+*.pyc
