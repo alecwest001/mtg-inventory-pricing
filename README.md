@@ -258,6 +258,16 @@ Excel inventory workbook
 
 The launcher checks the local MTGJSON databases before starting the price server. It then waits for the Python server to report that it is ready before opening the Excel workbook.
 
+The project is designed to be started using start_server.bat.
+
+The batch file starts the MTGJSON updater, launches the Price Server, waits for the server to become available, and then opens the Excel workbook.
+
+The compiled MTGJSONUpdater.exe and PriceServer.exe files are required for start_server.bat to run. These executables are generated from the included PyInstaller .spec files and are included in the packaged version of the application.
+
+For development, the Python source files can be run directly, or the executables can be rebuilt using the included .spec files.
+
+The Excel workbook communicates with the local Python server through http://127.0.0.1:5000.
+
 ## Why I Built It
 
 I originally built this project to create something useful for an LGS while expanding my knowledge of Python and API development.
