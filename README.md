@@ -18,6 +18,9 @@ The current system can:
 * Store quantity, condition, printing, and language
 * Retrieve pricing from local MTGJSON data
 * Retrieve live pricing from JustTCG
+* Match cards between MTGJSON and JustTCG using TCGplayer Product IDs
+* Verify returned JustTCG pricing against the expected TCGplayer Product ID
+* Return pricing and verification data to Excel
 * Maintain local MTGJSON databases
 * Check for updated MTGJSON data
 * Run pricing functionality through a local Python server
@@ -34,14 +37,44 @@ Excel / VBA
     v
 Python HTTP Server
     |
-    +---------------------+
-    |                     |
-    v                     v
-MTGJSON                JustTCG
-Local Card Data        Live Pricing
+    +-----------------------------+
+    |                             |
+    v                             v
+MTGJSON                       JustTCG
+Local Card Data               Live Pricing
+    |
+    | TCGplayer Product ID
+    +--------------------------->|
+                                  |
+                                  v
+                            ID Verification
 ```
 
-The separation between the Excel front end and Python backend allows the project to handle external API communication and local data processing outside of Excel.
+The Excel front end handles inventory management and user interaction while the Python backend handles local database access, API communication, and cross-source card verification.
+
+## Card Identification & Verification
+
+A major part of the project is making sure that a live price returned by JustTCG actually corresponds to the card being requested.
+
+The system uses MTGJSON as the initial source of card identity information. When a card is found, the system retrieves its MTGJSON UUID and TCGplayer Product ID.
+
+The TCGplayer Product ID is then used to request the corresponding live pricing information from JustTCG.
+
+The Python backend verifies that the TCGplayer Product ID returned by JustTCG matches the Product ID obtained from MTGJSON before marking the result as verified.
+
+The system also returns additional information for auditing:
+
+* MTGJSON UUID
+* TCGplayer Product ID
+* JustTCG card name
+* JustTCG set
+* Card number
+* Condition
+* Printing
+* Language
+* Verification status
+
+This approach avoids relying exclusively on human-readable card names, which can differ between data sources. For example, the same product may appear as `Sol Ring` in the inventory while JustTCG identifies it as `Sol Ring (Borderless)`.
 
 ## Technology
 
@@ -61,7 +94,7 @@ The separation between the Excel front end and Python backend allows the project
 
 **Work in progress.**
 
-The core application is functional, but several planned features are still under development.
+The core application and pricing workflows are functional, while several inventory-management features remain under development.
 
 ### Working
 
@@ -73,13 +106,26 @@ The core application is functional, but several planned features are still under
 
 **Pricing**
 
-* MTGJSON pricing
+* MTGJSON cached pricing
 * JustTCG live pricing
-* Separate workflows for local and live pricing
+* Separate workflows for cached and live pricing
+* Pricing returned directly to the Excel interface
+
+**Card Identification**
+
+* MTGJSON UUID lookup
+* TCGplayer Product ID lookup
+* TCGplayer Product ID matching between MTGJSON and JustTCG
+* Card number verification
+* Condition verification
+* Printing verification
+* Language verification
+* Verification data returned to Excel
 
 **MTGJSON**
 
-* Local database files
+* Local card database
+* Local pricing database
 * Database update utility
 * Remote update detection
 * Database replacement when updates are available
@@ -91,14 +137,15 @@ The core application is functional, but several planned features are still under
 * API communication between Excel and Python
 * Local configuration for API credentials
 * Server health checking
+* PyInstaller build configuration
 
 ### In Progress
 
-**Card ID Matching**
+**Excel Interface**
 
-The current pricing workflows can identify cards using search criteria, but the project is being upgraded to use card identifiers to improve reliability when matching cards between MTGJSON and JustTCG.
+The core search and pricing workflow is functional. The Excel interface is continuing to be refined, including the presentation of pricing information and the handling of technical audit data.
 
-This is particularly useful because the two data sources do not always use identical naming conventions for sets and cards.
+The workbook maintains detailed verification information so that pricing results can be traced back to the identifiers used by the backend.
 
 ### Planned
 
@@ -117,9 +164,9 @@ A data-processing step that will combine duplicate cards entered into inventory 
 
 **Automated Database Updates**
 
-The current MTGJSON updater is functional, but the planned application will periodically check for database updates while running.
+The current MTGJSON updater can determine whether local databases need to be updated and download updated versions.
 
-The intended update-check interval is approximately four hours.
+Periodic background update checking is planned while the application is running, with an intended update-check interval of approximately four hours.
 
 **Inventory Valuation**
 
@@ -133,7 +180,7 @@ The project stores the required MTGJSON databases locally rather than requiring 
 
 The `MTGJSONUpdater` utility checks the remote files for changes and updates the local databases when appropriate.
 
-The current updater can determine whether the local files are current and download updated versions. Periodic background update checking is planned but has not yet been implemented.
+The updater can determine whether the local files are current and download updated versions. Periodic background update checking is planned but has not yet been implemented.
 
 ## JustTCG
 
@@ -143,13 +190,19 @@ The original implementation made API calls directly from Excel/Power Query while
 
 The Python server now handles communication with JustTCG, keeping the API credentials and API-specific processing outside of the Excel workbook.
 
+Live pricing requests are matched against the TCGplayer Product ID obtained from MTGJSON before a result is marked as verified.
+
 ## Development Challenge
 
-One of the most challenging parts of the project was getting the JustTCG API integration working correctly through Power Query in the original Excel implementation.
+One of the early challenges of the project was getting the JustTCG API integration working correctly through Power Query in the original Excel implementation.
 
 That initial implementation provided the foundation for understanding the API and its responses. The pricing functionality was later migrated into Python as the project evolved toward a client/server architecture.
 
-Another ongoing challenge is reconciling card identifiers and naming conventions between MTGJSON and JustTCG. The project is being developed to use card IDs rather than relying exclusively on search terms.
+A more significant challenge was reconciling card identities between MTGJSON and JustTCG. Human-readable names and set information are not always consistent between data sources.
+
+The solution was to use the TCGplayer Product ID as a cross-source identifier and validate the returned ID before accepting a live pricing result.
+
+This also created a useful audit trail inside Excel, allowing the application to retain the identifiers and returned card information used to verify each live price.
 
 ## Project Structure
 
@@ -162,11 +215,10 @@ Card Pricing Prototype/
 ├── PriceServer.spec
 ├── price_server.py
 ├── start_server.bat
-├── Store - Inventory Test v2.xlsm
-└── update_mtgjson.py
+└── Store - Inventory Test v2.xlsm
 ```
 
-Generated databases, compiled executables, debug files, test environments, and local configuration files are excluded from version control.
+Generated databases, compiled executables, debug files, test environments, Python cache files, and local configuration files are excluded from version control.
 
 ## Configuration
 
@@ -222,7 +274,6 @@ The project will continue to evolve as new ideas and requirements are explored.
 
 Some of the planned development includes:
 
-* Card ID-based matching
 * CSV inventory imports
 * Database-assisted card entry
 * Duplicate inventory consolidation
@@ -231,6 +282,7 @@ Some of the planned development includes:
 * Full inventory valuation
 * Additional inventory management functionality
 * Further improvements to the Excel interface
+* Additional pricing and inventory workflows
 
 ## Author
 
@@ -241,3 +293,4 @@ Alec West
 This is an independent personal project and is not affiliated with MTGJSON or JustTCG.
 
 Pricing and card data are provided by external services and may change independently of this project.
+

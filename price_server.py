@@ -62,6 +62,7 @@ SERVER_MESSAGE = "Starting price server..."
 # ---------------------------------------------------------
 
 MTGJSON_CARDS = {}
+MTGJSON_TCGPLAYER_IDS = {}
 MTGJSON_PRICES = {}
 
 
@@ -89,12 +90,7 @@ def load_mtgjson():
             f"Missing MTGJSON file: {ALL_PRICES_FILE}"
         )
 
-        SERVER_MESSAGE = "Loading card database..."
-
-    print("Loading AllPrintings.json.gz...")
-
-    with gzip.open(ALL_PRINTINGS_FILE, "rt", encoding="utf-8") as file:
-        all_printings = json.load(file)
+    SERVER_MESSAGE = "Loading card database..."
 
     # -----------------------------------------------------
     # Load AllPrintings
@@ -134,13 +130,18 @@ def load_mtgjson():
 
             MTGJSON_CARDS[key] = uuid
 
+            identifiers = card.get("identifiers", {})
+
+            tcgplayer_id = identifiers.get("tcgplayerProductId")
+
+            if tcgplayer_id:
+                MTGJSON_TCGPLAYER_IDS[key] = str(tcgplayer_id)
+
             card_count += 1
 
     print(f"Loaded {card_count:,} card records.")
     
     SERVER_MESSAGE = "Loading price database..."
-
-    print("Loading AllPricesToday.json.gz...")
 
     # -----------------------------------------------------
     # Load AllPricesToday
@@ -228,6 +229,7 @@ def get_mtgjson_price(request_data):
     )
 
     uuid = MTGJSON_CARDS.get(key)
+    tcgplayer_id = MTGJSON_TCGPLAYER_IDS.get(key)
 
     if not uuid:
 
@@ -335,6 +337,7 @@ def get_mtgjson_price(request_data):
         "cardNumber": card_number,
         "printing": printing,
         "uuid": uuid,
+        "tcgplayerId": tcgplayer_id,
         "price": float(price),
         "date": latest_date
     }
@@ -451,15 +454,17 @@ def get_price_from_justtcg(card_data):
 
 def lookup_price(request_data):
     """
-    Call JustTCG using the information supplied by Excel.
+    Find the exact card in MTGJSON, obtain its TCGplayer
+    Product ID, and use that ID to retrieve live pricing
+    from JustTCG.
     """
 
     card_name = str(
         request_data.get("cardName", "")
     ).strip()
 
-    set_id = str(
-        request_data.get("setID", "")
+    set_name = str(
+        request_data.get("set", "")
     ).strip()
 
     card_number = str(
@@ -478,15 +483,17 @@ def lookup_price(request_data):
         request_data.get("language", "")
     ).strip()
 
+    # -----------------------------------------------------
     # Basic validation
+    # -----------------------------------------------------
 
     missing = []
 
     if not card_name:
         missing.append("cardName")
 
-    if not set_id:
-        missing.append("setID")
+    if not set_name:
+        missing.append("set")
 
     if not card_number:
         missing.append("cardNumber")
@@ -508,14 +515,50 @@ def lookup_price(request_data):
         )
 
     # -----------------------------------------------------
-    # Build JustTCG query
+    # Find exact card in MTGJSON
+    # -----------------------------------------------------
+
+    key = (
+        card_name.lower(),
+        set_name.lower(),
+        card_number.lower()
+    )
+
+    uuid = MTGJSON_CARDS.get(key)
+
+    if not uuid:
+
+        return {
+            "success": False,
+            "error": (
+                "Card was not found in the MTGJSON "
+                "card database."
+            )
+        }
+
+    # -----------------------------------------------------
+    # Find TCGplayer Product ID
+    # -----------------------------------------------------
+
+    tcgplayer_id = MTGJSON_TCGPLAYER_IDS.get(key)
+
+    if not tcgplayer_id:
+
+        return {
+            "success": False,
+            "error": (
+                "No TCGplayer Product ID was found "
+                "for this card in the MTGJSON database."
+            ),
+            "uuid": uuid
+        }
+
+    # -----------------------------------------------------
+    # Build JustTCG query using TCGplayer Product ID
     # -----------------------------------------------------
 
     params = {
-        "q": card_name,
-        "game": "magic-the-gathering",
-        "set": set_id,
-        "number": card_number,
+        "tcgplayerId": tcgplayer_id,
         "condition": condition,
         "printing": printing,
         "language": language
@@ -526,6 +569,19 @@ def lookup_price(request_data):
     )
 
     url = JUSTTCG_URL + "?" + query_string
+
+    print("")
+    print("JustTCG lookup")
+    print("----------------------------------------")
+    print(f"Card:            {card_name}")
+    print(f"Set:             {set_name}")
+    print(f"Number:          {card_number}")
+    print(f"MTGJSON UUID:    {uuid}")
+    print(f"TCGplayer ID:    {tcgplayer_id}")
+    print(f"Condition:       {condition}")
+    print(f"Printing:        {printing}")
+    print(f"Language:        {language}")
+    print("----------------------------------------")
 
     request = urllib.request.Request(
         url,
@@ -548,6 +604,7 @@ def lookup_price(request_data):
         ) as response:
 
             status = response.status
+
             body = response.read().decode(
                 "utf-8"
             )
@@ -611,7 +668,47 @@ def lookup_price(request_data):
         )
 
     # -----------------------------------------------------
-    # Extract price
+    # Validate returned card identity
+    # -----------------------------------------------------
+
+    cards = data.get("data", [])
+
+    if not cards:
+
+        return {
+            "success": False,
+            "error": (
+                "JustTCG returned no card for "
+                f"TCGplayer Product ID {tcgplayer_id}."
+            ),
+            "uuid": uuid,
+            "tcgplayerId": tcgplayer_id
+        }
+
+    justtcg_card = cards[0]
+
+    returned_tcgplayer_id = str(
+        justtcg_card.get(
+            "tcgplayerId",
+            ""
+        )
+    )
+
+    if returned_tcgplayer_id != str(tcgplayer_id):
+
+        return {
+            "success": False,
+            "error": (
+                "JustTCG returned a different "
+                "TCGplayer Product ID than expected."
+            ),
+            "uuid": uuid,
+            "tcgplayerId": tcgplayer_id,
+            "returnedTcgplayerId": returned_tcgplayer_id
+        }
+
+    # -----------------------------------------------------
+    # Extract requested variant
     # -----------------------------------------------------
 
     result = get_price_from_justtcg(
@@ -626,12 +723,31 @@ def lookup_price(request_data):
                 "No matching price was found "
                 "for this card, condition, "
                 "printing, and language."
-            )
+            ),
+            "uuid": uuid,
+            "tcgplayerId": tcgplayer_id
         }
+
+    # -----------------------------------------------------
+    # Return validated result
+    # -----------------------------------------------------
 
     return {
         "success": True,
-        **result
+        "verified": True,
+        "cardName": card_name,
+        "set": set_name,
+        "cardNumber": card_number,
+        "uuid": uuid,
+        "tcgplayerId": tcgplayer_id,
+        "price": result["price"],
+        "date": result["date"],
+        "condition": result["condition"],
+        "printing": result["printing"],
+        "language": result["language"],
+        "justtcgName": result["card_name"],
+        "justtcgSet": result["set_name"],
+        "justtcgNumber": result["card_number"]
     }
 
 
