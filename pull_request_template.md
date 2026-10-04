@@ -19,6 +19,7 @@ Describe how the changes were tested.
 * [ ] Tested locally
 * [ ] Existing functionality still works
 * [ ] No API keys, credentials, or sensitive information included
+* [ ] Python source changes have been tested before rebuilding executables
 
 ## Additional Notes
 
