@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -75,7 +76,10 @@ def get_remote_sha256(url):
     # We only need the first field.
     remote_hash = content.split()[0].lower()
 
-    if len(remote_hash) != 64:
+    if (
+        len(remote_hash) != 64
+        or any(c not in "0123456789abcdef" for c in remote_hash)
+    ):
         raise RuntimeError(
             "Invalid SHA-256 value received from MTGJSON."
         )
@@ -233,69 +237,7 @@ def update_file(name, info):
         destination,
         remote_hash
     )
-    # --------------------------------------------------------
-    # No local file
-    # --------------------------------------------------------
 
-    if not destination.exists():
-
-        print("Local file does not exist.")
-        print("Download required.")
-
-        return download_and_replace(
-            name,
-            info,
-            destination,
-            remote_hash
-        )
-
-    # --------------------------------------------------------
-    # Calculate local hash
-    # --------------------------------------------------------
-
-    try:
-
-        local_hash = calculate_sha256(destination)
-
-    except Exception as e:
-
-        print()
-        print("Unable to read the existing local file.")
-        print(f"Reason: {e}")
-        print("Download required.")
-
-        return download_and_replace(
-            name,
-            info,
-            destination,
-            remote_hash
-        )
-
-    print(f"Local SHA-256:  {local_hash}")
-
-    # --------------------------------------------------------
-    # Already current
-    # --------------------------------------------------------
-
-    if local_hash == remote_hash:
-
-        print("Result: Already current.")
-        print("No download required.")
-
-        return True
-
-    # --------------------------------------------------------
-    # Update available
-    # --------------------------------------------------------
-
-    print("Result: Update available.")
-
-    return download_and_replace(
-        name,
-        info,
-        destination,
-        remote_hash
-    )
 
 
 def download_and_replace(name, info, destination, expected_hash):
@@ -383,6 +325,59 @@ def download_and_replace(name, info, destination, expected_hash):
             except Exception:
                 pass
 
+def write_update_result(results, overall_result):
+    result_path = DATA_DIR / "MTGJSONUpdateResult.json"
+
+    result = {
+        "overall_result": overall_result,
+        "AllPricesToday": results.get("AllPricesToday"),
+        "AllPrintings": results.get("AllPrintings"),
+    }
+
+    temp_path = None
+
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        fd, temp_name = tempfile.mkstemp(
+            prefix="MTGJSONUpdateResult_",
+            suffix=".tmp",
+            dir=DATA_DIR
+        )
+
+        os.close(fd)
+        temp_path = Path(temp_name)
+
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(
+                result,
+                f,
+                indent=2
+            )
+
+        os.replace(
+            temp_path,
+            result_path
+        )
+
+        temp_path = None
+
+        print()
+        print(f"Update result written to:")
+        print(result_path)
+
+    except Exception as e:
+        print()
+        print("WARNING: Unable to write update result file.")
+        print(f"Reason: {e}")
+
+    finally:
+        if temp_path is not None and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+
 
 # ============================================================
 # Main
@@ -456,31 +451,71 @@ def main():
     ]
 
     if failed:
+        overall_result = "FAILED"
+
         print("Overall result: FAILED")
         print()
         print("One or more databases are unavailable.")
+
+        write_update_result(
+            results,
+            overall_result
+        )
+
         return 1
 
     if fallback:
+        overall_result = "FALLBACK"
+
         print("Overall result: FALLBACK")
         print()
         print("One or more updates failed.")
         print("Existing cached databases were retained.")
+
+        write_update_result(
+            results,
+            overall_result
+        )
+
         return 0
 
     if updated:
+        overall_result = "UPDATED"
+
         print("Overall result: UPDATED")
         print()
         print("One or more MTGJSON databases were updated.")
+
+        write_update_result(
+            results,
+            overall_result
+        )
+
         return 0
 
     if current:
+        overall_result = "CURRENT"
+
         print("Overall result: CURRENT")
         print()
         print("All MTGJSON databases are already current.")
+
+        write_update_result(
+            results,
+            overall_result
+        )
+
         return 0
 
+    overall_result = "UNKNOWN"
+
     print("Overall result: UNKNOWN")
+
+    write_update_result(
+        results,
+        overall_result
+    )
+
     return 1
 
 

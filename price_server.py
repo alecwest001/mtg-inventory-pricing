@@ -365,6 +365,27 @@ def send_json(handler, status_code, data):
 
     handler.wfile.write(response)
 
+def request_server_shutdown():
+    """
+    Request the HTTP server to shut down cleanly.
+
+    HTTPServer.shutdown() must be called from a thread
+    other than the thread currently running serve_forever().
+    """
+
+    import threading
+
+    def shutdown():
+        print("")
+        print("Shutdown requested.")
+        print("Stopping price server...")
+
+        server.shutdown()
+
+    threading.Thread(
+        target=shutdown,
+        daemon=True
+    ).start()
 
 def get_price_from_justtcg(card_data):
     """
@@ -804,6 +825,38 @@ class PriceRequestHandler(
         )
 
     def do_POST(self):
+
+        # -------------------------------------------------
+        # Controlled server shutdown
+        # -------------------------------------------------
+
+        if self.path == "/shutdown":
+
+            if self.client_address[0] != "127.0.0.1":
+
+                send_json(
+                    self,
+                    403,
+                    {
+                        "success": False,
+                        "error": "Shutdown is only available locally."
+                    }
+                )
+
+                return
+
+            send_json(
+                self,
+                200,
+                {
+                    "success": True,
+                    "message": "Price server shutdown requested."
+                }
+            )
+
+            request_server_shutdown()
+
+            return
 
         # -------------------------------------------------
         # Determine endpoint
