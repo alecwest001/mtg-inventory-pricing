@@ -5,7 +5,6 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import json
-import winreg
 from pathlib import Path
 
 # Winotify notifier instance
@@ -28,7 +27,15 @@ PRICE_SERVER_EXE = BASE_DIR / "PriceServer.exe"
 
 PRICE_SERVER_URL = "http://127.0.0.1:5000"
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 60 * 60 * 4
+
+REMINDER_INTERVAL = 60 * 60
+
+TEST_MODE = False
+
+NOTIFICATION_STATE_FILE = (
+    DATA_DIR / "MTGJSONNotificationState.json"
+)
 
 REQUEST_TIMEOUT = 10
 
@@ -250,7 +257,7 @@ def handle_protocol_callback(callback_url):
             "unknown action."
         )
 
-        return True
+        return False
 
     if parsed.path not in ("", "/"):
 
@@ -259,7 +266,7 @@ def handle_protocol_callback(callback_url):
             "unexpected path."
         )
 
-        return True
+        return False
 
     if parsed.query or parsed.fragment:
 
@@ -268,7 +275,7 @@ def handle_protocol_callback(callback_url):
             "query strings and fragments are not allowed."
         )
 
-        return True
+        return False
 
     action = parsed.netloc.lower()
 
@@ -289,19 +296,14 @@ def handle_protocol_callback(callback_url):
 
     if action == "later":
 
-        log(
-            "Later callback received. "
-            "No update will be performed."
+        set_last_notification_time(
+            time.time()
         )
 
-        with open(
-            BASE_DIR / "protocol_test.txt",
-            "w",
-            encoding="utf-8"
-        ) as test_file:
-            test_file.write(
-                "The mtgjson-monitor://later protocol was successfully launched.\n"
-            )
+        log(
+            "Later callback received. "
+            "Update notification deferred."
+        )
 
         return True
 
@@ -382,23 +384,23 @@ def calculate_sha256(file_path):
     return sha256.hexdigest().lower()
 
 
-def check_for_updates(previous_hashes):
+def check_for_updates():
     """
-    Check MTGJSON's published SHA-256 values.
-
-    Only the small .sha256 files are downloaded.
+    Compare the local MTGJSON database files against the
+    hashes currently published by MTGJSON.
 
     Returns:
 
         (update_available, current_hashes)
 
         update_available:
-            True if MTGJSON changed since the previous check.
+            True if any local database differs from the
+            corresponding remote MTGJSON database.
 
         current_hashes:
             The remote hashes retrieved during this check.
 
-        (None, previous_hashes):
+        (None, current_hashes):
             If the remote check could not be completed.
     """
 
@@ -409,6 +411,10 @@ def check_for_updates(previous_hashes):
     check_failed = False
 
     for name, info in FILES.items():
+
+        # ----------------------------------------------------
+        # Get current remote hash
+        # ----------------------------------------------------
 
         try:
 
@@ -433,19 +439,54 @@ def check_for_updates(previous_hashes):
             f"{remote_hash}"
         )
 
-        previous_hash = previous_hashes.get(
-            name
+        # ----------------------------------------------------
+        # Locate local database
+        # ----------------------------------------------------
+
+        local_path = (
+            DATA_DIR / info["filename"]
         )
 
-        if previous_hash is None:
+        if not local_path.exists():
 
             log(
-                f"{name}: Initial hash recorded."
+                f"{name}: Local database file "
+                f"was not found."
             )
 
+            update_available = True
             continue
 
-        if remote_hash != previous_hash:
+        # ----------------------------------------------------
+        # Calculate local hash
+        # ----------------------------------------------------
+
+        try:
+
+            local_hash = calculate_sha256(
+                local_path
+            )
+
+        except Exception as error:
+
+            log(
+                f"{name}: Unable to calculate "
+                f"local SHA-256: {error}"
+            )
+
+            check_failed = True
+            continue
+
+        log(
+            f"{name} local SHA-256: "
+            f"{local_hash}"
+        )
+
+        # ----------------------------------------------------
+        # Compare local database against MTGJSON
+        # ----------------------------------------------------
+
+        if remote_hash != local_hash:
 
             log(
                 f"{name}: UPDATE AVAILABLE"
@@ -461,10 +502,9 @@ def check_for_updates(previous_hashes):
 
     if check_failed:
 
-        return None, previous_hashes
+        return None, current_hashes
 
     return update_available, current_hashes
-
 
 # ============================================================
 # Price Server
@@ -805,6 +845,82 @@ def get_update_result():
 
 
 # ============================================================
+# Notification State
+# ============================================================
+
+def get_last_notification_time():
+    """
+    Read the time the last update notification was shown
+    or deferred.
+    """
+
+    if not NOTIFICATION_STATE_FILE.exists():
+        return None
+
+    try:
+
+        with open(
+            NOTIFICATION_STATE_FILE,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            state = json.load(file)
+
+        value = state.get(
+            "last_notification_time"
+        )
+
+        if isinstance(value, (int, float)):
+            return value
+
+    except Exception as error:
+
+        log(
+            f"Unable to read notification state: "
+            f"{error}"
+        )
+
+    return None
+
+
+def set_last_notification_time(timestamp):
+    """
+    Store the time the update notification was last shown
+    or deferred.
+    """
+
+    try:
+        if timestamp is None:
+
+            if NOTIFICATION_STATE_FILE.exists():
+
+                NOTIFICATION_STATE_FILE.unlink()
+
+            return
+
+        with open(
+            NOTIFICATION_STATE_FILE,
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            json.dump(
+                {
+                    "last_notification_time": timestamp
+                },
+                file
+            )
+
+    except Exception as error:
+
+        log(
+            f"Unable to save notification state: "
+            f"{error}"
+        )
+
+
+# ============================================================
 # Notification
 # ============================================================
 
@@ -812,11 +928,38 @@ def show_update_notification():
     """
     Show the MTGJSON update notification.
 
-    Both development and production use the same
-    mtgjson-monitor:// protocol activation mechanism.
+    Notifications are limited by REMINDER_INTERVAL so that
+    choosing Later does not result in a notification every
+    monitor check.
     """
+    if not TEST_MODE:
 
-    return show_notification()
+        last_notification = get_last_notification_time()
+
+        if last_notification is not None:
+
+            elapsed = (
+                time.time() - last_notification
+            )
+
+            if elapsed < REMINDER_INTERVAL:
+
+                log(
+                    "Update notification is currently "
+                    "within the reminder interval."
+                )
+
+                return False
+
+    result = show_notification()
+
+    if result:
+
+        set_last_notification_time(
+            time.time()
+        )
+
+    return result
 
 
 def initialize_notifier():
@@ -927,6 +1070,10 @@ def perform_update():
 
             return False
 
+        set_last_notification_time(
+            None
+        )
+
         log(
             "MTGJSON update and PriceServer "
             "restart completed successfully."
@@ -985,34 +1132,13 @@ def main():
 
     register_protocol_handler()
 
-    previous_hashes = {}
-
     while True:
 
         try:
 
-            update_available, current_hashes = (
-                check_for_updates(
-                    previous_hashes
-                )
+            update_available, _ = (
+                check_for_updates()
             )
-
-            if current_hashes:
-
-                if not previous_hashes:
-
-                    log(
-                        "TEST: Forcing update detection."
-                    )
-
-                    previous_hashes = {
-                        name: "0" * 64
-                        for name in current_hashes
-                    }
-
-                elif update_available is False:
-
-                    previous_hashes = current_hashes
 
             if update_available:
 
