@@ -5,6 +5,8 @@ import urllib.request
 import urllib.error
 import gzip
 import sys
+import secrets
+import ijson
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -56,6 +58,12 @@ PORT = 5000
 SERVER_STATUS = "starting"
 SERVER_MESSAGE = "Starting price server..."
 
+SHUTDOWN_TOKEN_FILE = (
+    DATA_DIR / "PriceServerShutdownToken"
+)
+
+SHUTDOWN_TOKEN = None
+
 
 # ---------------------------------------------------------
 # MTGJSON Data
@@ -68,7 +76,7 @@ MTGJSON_PRICES = {}
 
 def load_mtgjson():
     """
-    Load AllPrintings and AllPricesToday into memory.
+    Stream MTGJSON card and pricing data into memory.
     """
     global SERVER_STATUS, SERVER_MESSAGE
 
@@ -98,71 +106,249 @@ def load_mtgjson():
 
     print("Loading AllPrintings.json.gz...")
 
-    with gzip.open(
-        ALL_PRINTINGS_FILE,
-        "rt",
-        encoding="utf-8"
-    ) as file:
-
-        all_printings = json.load(file)
-
     card_count = 0
 
-    for set_data in all_printings.get("data", {}).values():
+    # Map MTGJSON set codes to human-readable set names.
+    set_names = {}
 
-        set_name = set_data.get("name", "")
+    # Temporarily store cards by set code.
+    card_records = []
 
-        for card in set_data.get("cards", []):
+    current_card_name = ""
+    current_card_number = ""
+    current_card_uuid = ""
+    current_tcgplayer_id = ""
+    current_card_set_code = ""
 
-            card_name = card.get("name", "")
-            card_number = str(card.get("number", ""))
+    in_card = False
 
-            uuid = card.get("uuid")
+    with gzip.open(
+        ALL_PRINTINGS_FILE,
+        "rb"
+    ) as file:
 
-            if not uuid:
+        parser = ijson.parse(file)
+
+        for prefix, event, value in parser:
+
+            # ---------------------------------------------
+            # Set name
+            # ---------------------------------------------
+
+            if (
+                event == "string"
+                and prefix.startswith("data.")
+                and prefix.endswith(".name")
+                and prefix.count(".") == 2
+            ):
+
+                set_code = prefix.split(".")[1]
+
+                set_names[set_code] = value
+
                 continue
 
-            key = (
-                card_name.lower(),
-                set_name.lower(),
-                card_number.lower()
+            # ---------------------------------------------
+            # Start of card
+            # ---------------------------------------------
+
+            if (
+                event == "start_map"
+                and prefix.endswith(".cards.item")
+            ):
+
+                in_card = True
+
+                current_card_name = ""
+                current_card_number = ""
+                current_card_uuid = ""
+                current_tcgplayer_id = ""
+                current_card_set_code = ""
+
+                continue
+
+            if not in_card:
+                continue
+
+            # ---------------------------------------------
+            # Card fields
+            # ---------------------------------------------
+
+            if (
+                event == "string"
+                and prefix.endswith(".cards.item.name")
+            ):
+
+                current_card_name = value
+
+            elif (
+                event in ("string", "number")
+                and prefix.endswith(".cards.item.number")
+            ):
+
+                current_card_number = str(value)
+
+            elif (
+                event == "string"
+                and prefix.endswith(".cards.item.uuid")
+            ):
+
+                current_card_uuid = value
+
+            elif (
+                event in ("string", "number")
+                and prefix.endswith(
+                    ".cards.item.identifiers.tcgplayerProductId"
+                )
+            ):
+
+                current_tcgplayer_id = str(value)
+
+            elif (
+                event == "string"
+                and prefix.endswith(".cards.item.setCode")
+            ):
+
+                current_card_set_code = value
+
+            # ---------------------------------------------
+            # End of card
+            # ---------------------------------------------
+
+            if (
+                event == "end_map"
+                and prefix.endswith(".cards.item")
+            ):
+
+                if current_card_uuid:
+
+                    card_records.append(
+                        (
+                            current_card_name,
+                            current_card_number,
+                            current_card_uuid,
+                            current_tcgplayer_id,
+                            current_card_set_code
+                        )
+                    )
+
+                in_card = False
+
+    # -----------------------------------------------------
+    # Build card lookup using set names
+    # -----------------------------------------------------
+
+    for (
+        card_name,
+        card_number,
+        card_uuid,
+        tcgplayer_id,
+        set_code
+    ) in card_records:
+
+        set_name = set_names.get(
+            set_code,
+            ""
+        )
+
+        if not set_name:
+            continue
+
+        key = (
+            card_name.lower(),
+            set_name.lower(),
+            card_number.lower()
+        )
+
+        MTGJSON_CARDS[key] = card_uuid
+
+        if tcgplayer_id:
+
+            MTGJSON_TCGPLAYER_IDS[key] = (
+                tcgplayer_id
             )
 
-            MTGJSON_CARDS[key] = uuid
+        card_count += 1
 
-            identifiers = card.get("identifiers", {})
+    # Release temporary card records.
+    del card_records
 
-            tcgplayer_id = identifiers.get("tcgplayerProductId")
+    print(
+        f"Loaded {card_count:,} card records."
+    )
 
-            if tcgplayer_id:
-                MTGJSON_TCGPLAYER_IDS[key] = str(tcgplayer_id)
-
-            card_count += 1
-
-    print(f"Loaded {card_count:,} card records.")
-    
-    SERVER_MESSAGE = "Loading price database..."
-
-    # -----------------------------------------------------
-    # Load AllPricesToday
-    # -----------------------------------------------------
-
+    print("Loading AllPricesToday...")
     print("Loading AllPricesToday.json.gz...")
+
+    price_count = 0
 
     with gzip.open(
         ALL_PRICES_FILE,
-        "rt",
-        encoding="utf-8"
+        "rb"
     ) as file:
 
-        all_prices = json.load(file)
+        parser = ijson.parse(file)
 
-    MTGJSON_PRICES.update(
-        all_prices.get("data", {})
-    )
+        for prefix, event, value in parser:
+
+            if event not in ("number", "string"):
+                continue
+
+            parts = prefix.split(".")
+
+            # Expected:
+            #
+            # data.UUID.paper.tcgplayer.retail.normal.DATE
+            # data.UUID.paper.tcgplayer.retail.foil.DATE
+
+            if len(parts) != 7:
+                continue
+
+            if parts[0] != "data":
+                continue
+
+            if parts[2] != "paper":
+                continue
+
+            if parts[3] != "tcgplayer":
+                continue
+
+            if parts[4] != "retail":
+                continue
+
+            price_type = parts[5]
+
+            if price_type not in ("normal", "foil"):
+                continue
+
+            uuid = parts[1]
+            price_date = parts[6]
+
+            if not uuid or not price_date:
+                continue
+
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                continue
+
+            if uuid not in MTGJSON_PRICES:
+                MTGJSON_PRICES[uuid] = {}
+
+            MTGJSON_PRICES[uuid][price_type] = {
+                "price": price,
+                "date": price_date
+            }
+
+            price_count += 1
 
     print(
         f"Loaded {len(MTGJSON_PRICES):,} price records."
+    )
+
+    print(
+        f"  Price entries processed: "
+        f"{price_count:,}"
     )
 
     print("MTGJSON ready.")
@@ -258,16 +444,6 @@ def get_mtgjson_price(request_data):
         }
 
     # -----------------------------------------------------
-    # Get paper pricing
-    # -----------------------------------------------------
-
-    paper = price_data.get("paper", {})
-
-    tcgplayer = paper.get("tcgplayer", {})
-
-    retail = tcgplayer.get("retail", {})
-
-    # -----------------------------------------------------
     # Determine printing
     # -----------------------------------------------------
 
@@ -281,12 +457,11 @@ def get_mtgjson_price(request_data):
 
         price_type = "normal"
 
-    price_history = retail.get(
-        price_type,
-        {}
+    price_record = price_data.get(
+        price_type
     )
 
-    if not price_history:
+    if not price_record:
 
         return {
             "success": False,
@@ -297,35 +472,25 @@ def get_mtgjson_price(request_data):
         }
 
     # -----------------------------------------------------
-    # Get latest available date
+    # Get price
     # -----------------------------------------------------
 
-    dates = list(price_history.keys())
-
-    if not dates:
-
-        return {
-            "success": False,
-            "error": (
-                "No dated MTGJSON price was found."
-            )
-        }
-
-    latest_date = max(dates)
-
-    price = price_history.get(
-        latest_date
+    price = price_record.get(
+        "price"
     )
 
-    if price is None:
+    latest_date = price_record.get(
+        "date"
+    )
+
+    if price is None or latest_date is None:
 
         return {
             "success": False,
             "error": (
-                "MTGJSON price data was empty."
+                "MTGJSON price data was incomplete."
             )
         }
-
     # -----------------------------------------------------
     # Return result
     # -----------------------------------------------------
@@ -364,6 +529,66 @@ def send_json(handler, status_code, data):
     handler.end_headers()
 
     handler.wfile.write(response)
+
+def initialize_shutdown_token():
+    """
+    Create a random authentication token for controlled
+    PriceServer shutdown.
+
+    The token is stored locally so the MTGJSON monitor can
+    authenticate its shutdown request.
+    """
+
+    global SHUTDOWN_TOKEN
+
+    DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    SHUTDOWN_TOKEN = secrets.token_urlsafe(32)
+
+    try:
+
+        with open(
+            SHUTDOWN_TOKEN_FILE,
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            file.write(
+                SHUTDOWN_TOKEN
+            )
+
+    except Exception as error:
+
+        raise RuntimeError(
+            "Unable to create PriceServer shutdown "
+            f"authentication token: {error}"
+        )
+
+    print(
+        "PriceServer shutdown authentication initialized."
+    )
+
+def is_shutdown_authorized(handler):
+    """
+    Validate the authentication token supplied by the
+    MTGJSON monitor.
+    """
+
+    supplied_token = handler.headers.get(
+        "X-PriceServer-Token",
+        ""
+    )
+
+    if not supplied_token:
+        return False
+
+    return secrets.compare_digest(
+        supplied_token,
+        SHUTDOWN_TOKEN or ""
+    )
 
 def request_server_shutdown():
     """
@@ -845,6 +1070,19 @@ class PriceRequestHandler(
 
                 return
 
+            if not is_shutdown_authorized(self):
+
+                send_json(
+                    self,
+                    403,
+                    {
+                        "success": False,
+                        "error": "Shutdown authentication failed."
+                    }
+                )
+
+                return
+
             send_json(
                 self,
                 200,
@@ -895,6 +1133,11 @@ class PriceRequestHandler(
 
                 raise ValueError(
                     "Request body is empty."
+                )
+
+            if content_length > 64 * 1024:
+                raise ValueError(
+                    "Request body is too large."
                 )
 
             body = self.rfile.read(
@@ -991,6 +1234,12 @@ if __name__ == "__main__":
     # -----------------------------------------------------
 
     load_mtgjson()
+
+    # -----------------------------------------------------
+    # Initialize shutdown authentication
+    # -----------------------------------------------------
+
+    initialize_shutdown_token()
 
     server = HTTPServer(
         (HOST, PORT),

@@ -12,23 +12,19 @@ The project combines an Excel/VBA front end with a local Python HTTP server to m
 
 The current system can:
 
-* Manually enter card inventory
-* Search existing inventory
+* Manually enter and search card inventory
 * Identify cards using card name, set, and card number
 * Store quantity, condition, printing, and language
-* Retrieve pricing from local MTGJSON data
+* Retrieve cached pricing from local MTGJSON data
 * Retrieve live pricing from JustTCG
 * Match cards between MTGJSON and JustTCG using TCGplayer Product IDs
-* Verify returned JustTCG pricing against the expected TCGplayer Product ID
-* Return pricing and verification data to Excel
-* Maintain local MTGJSON databases
-* Check for updated MTGJSON data
-* Monitor MTGJSON for database updates in the background
-* Notify the user when an MTGJSON update is available
-* Start an MTGJSON update from a Windows notification
-* Automatically restart the local Price Server after a successful database update
-* Verify that the restarted Price Server is healthy before completing the update process
-* Run pricing functionality through a local Python server
+* Return pricing, card identity, and verification information to Excel
+* Maintain and update local MTGJSON databases
+* Monitor MTGJSON for database updates
+* Notify the user when an update is available
+* Update the databases from a Windows notification
+* Restart the local Price Server after a successful update
+* Verify the Price Server is healthy after an update
 * Keep the JustTCG API key outside of the Excel workbook
 
 The Excel workbook is an integral part of the application rather than simply a demonstration interface. It contains the primary user interface and the VBA functionality that interacts with the Python backend.
@@ -75,11 +71,12 @@ PriceServer Restart
     |
     v
 Health Check
+
 ```
 
 The Excel front end handles inventory management and user interaction while the Python backend handles local database access, API communication, cross-source card verification, and database maintenance.
 
-The MTGJSON Monitor runs separately from the Price Server and is responsible for detecting database updates and coordinating the update and restart process.
+The MTGJSON Monitor runs separately from the Price Server and coordinates database update detection, notifications, updates, and server restarts.
 
 ## Card Identification & Verification
 
@@ -104,6 +101,38 @@ The system also returns additional information for auditing:
 * Verification status
 
 This approach avoids relying exclusively on human-readable card names, which can differ between data sources. For example, the same product may appear as `Sol Ring` in the inventory while JustTCG identifies it as `Sol Ring (Borderless)`.
+
+## MTGJSON Data Loading & Performance
+
+The Price Server previously loaded the MTGJSON databases using Python's standard `json.load()` function. Because `AllPrintings.json.gz` contains a large amount of card data, loading the complete JSON document into memory created significant memory overhead during startup.
+
+The Price Server has since been changed to use streaming JSON parsing through the Python `ijson` library.
+
+Instead of constructing the complete JSON document in memory, the server processes the MTGJSON data incrementally and retains only the information required by the application.
+
+For `AllPrintings.json.gz`, the server extracts:
+
+* Card name
+* Card number
+* MTGJSON UUID
+* TCGplayer Product ID
+* Set code
+
+Set codes are resolved to their human-readable MTGJSON set names and used to construct the card lookup index.
+
+For `AllPricesToday.json.gz`, the server extracts the current MTGJSON paper TCGplayer retail prices for:
+
+* Normal cards
+* Foil cards
+* Price date
+
+Only the pricing data required by the application is retained.
+
+This change substantially reduced the Price Server's memory usage during startup. During development testing, the previous implementation used roughly 1.8 GB of process memory while loading the databases, while the streaming implementation reduced the running server to well under 200 MB.
+
+The streaming implementation was tested against multiple cards and sets, including Commander Masters, Prophecy, and Wilds of Eldraine: Enchanting Tales.
+
+The Excel → PriceServer → MTGJSON pricing workflow was also tested with both existing and newly added inventory entries, including normal and foil pricing.
 
 ## MTGJSON Database Updates
 
@@ -130,7 +159,7 @@ The databases currently monitored are:
 
 ## MTGJSON Monitor
 
-The project now includes a background MTGJSON monitoring process.
+The project includes a background MTGJSON monitoring process.
 
 `mtgjson_monitor.py` periodically checks MTGJSON for updated database files. When an update is detected, the monitor displays a Windows toast notification with two options:
 
@@ -141,6 +170,7 @@ The **Update Now** action uses a registered Windows URI protocol:
 
 ```text
 mtgjson-monitor://update
+
 ```
 
 The monitor validates the URI before performing the requested action.
@@ -166,28 +196,27 @@ PriceServer restart
       |
       v
 PriceServer ready
+
 ```
 
 The monitor waits for the Price Server health endpoint to respond successfully before reporting that the restart has completed.
 
 ### Current Test Phase
 
-The MTGJSON Monitor is currently in an active test phase.
-
-The current development configuration uses a short check interval and forced update detection so that the notification and update workflow can be repeatedly tested without waiting for an actual MTGJSON release.
+The MTGJSON Monitor is currently being tested using a short check interval and forced update detection so that the complete workflow can be repeatedly tested without waiting for an actual MTGJSON release.
 
 The current test interval is approximately:
 
 ```text
 30 seconds
+
 ```
 
-The forced update detection is temporary test functionality and will be replaced with the intended production update-check behavior after testing is complete.
-
-The intended production configuration is approximately:
+The forced update detection is temporary test functionality. The intended production configuration is approximately:
 
 ```text
 4 hours
+
 ```
 
 The monitor and notification workflow have been tested end-to-end, including:
@@ -210,6 +239,7 @@ The monitor and notification workflow have been tested end-to-end, including:
 * VBA
 * Python
 * Python `http.server`
+* `ijson`
 * REST APIs
 * JSON
 * MTGJSON
@@ -224,7 +254,7 @@ The monitor and notification workflow have been tested end-to-end, including:
 
 **Work in progress.**
 
-The core application and pricing workflows are functional. The MTGJSON update monitoring and notification system is functional in its current test configuration, while several inventory-management features and production update behaviors remain under development.
+The core inventory and pricing workflows are functional. The MTGJSON updater and monitoring system are also functional in their current test configuration.
 
 ### Working
 
@@ -237,42 +267,39 @@ The core application and pricing workflows are functional. The MTGJSON update mo
 **Pricing**
 
 * MTGJSON cached pricing
+* Normal and foil MTGJSON pricing
 * JustTCG live pricing
-* Separate workflows for cached and live pricing
-* Pricing returned directly to the Excel interface
+* Separate cached and live pricing workflows
+* Pricing returned directly to Excel
+* Price dates returned with pricing data
 
 **Card Identification**
 
 * MTGJSON UUID lookup
 * TCGplayer Product ID lookup
 * TCGplayer Product ID matching between MTGJSON and JustTCG
-* Card number verification
-* Condition verification
-* Printing verification
-* Language verification
+* Condition, printing, and language filters passed to JustTCG
+* Card identity information returned to Excel
 * Verification data returned to Excel
 
 **MTGJSON**
 
-* Local card database
-* Local pricing database
+* Streaming card database parsing
+* Streaming pricing database parsing
+* Reduced Price Server memory usage
 * Database update utility
-* Remote SHA-256 update detection
-* Temporary download and validation
 * SHA-256 verification
-* Database replacement after successful validation
+* Safe temporary database replacement
 * Update result reporting
 
 **MTGJSON Monitor**
 
-* Background MTGJSON monitoring
+* Background update monitoring
 * Windows toast notifications
-* Update Now notification action
-* Later notification action
+* Update Now and Later actions
 * Windows URI protocol handling
-* Automatic Price Server restart after successful updates
-* Price Server health verification after restart
-* Test-phase forced update detection
+* Price Server restart after successful updates
+* Price Server health verification
 
 **Application**
 
@@ -280,6 +307,7 @@ The core application and pricing workflows are functional. The MTGJSON update mo
 * Python local HTTP server
 * API communication between Excel and Python
 * Local configuration for API credentials
+* Authenticated local Price Server shutdown
 * Server health checking
 * PyInstaller build configuration
 * Windows batch startup workflow
@@ -288,46 +316,15 @@ The core application and pricing workflows are functional. The MTGJSON update mo
 
 **Excel Interface**
 
-The core search and pricing workflow is functional. The Excel interface is continuing to be refined, including the presentation of pricing information and the handling of technical audit data.
-
-The workbook maintains detailed verification information so that pricing results can be traced back to the identifiers used by the backend.
+The core search and pricing workflow is functional. The Excel interface is continuing to be refined, including the presentation of pricing information and technical audit data.
 
 **MTGJSON Monitoring**
 
-The monitoring and notification workflow is currently being tested using a short update interval and forced update detection.
+The monitor is being transitioned from its short test configuration toward its intended production behavior, including approximately four-hour update checks and finalizing the background execution workflow.
 
-The next stage is transitioning the monitor from the test configuration to its intended production behavior, including approximately four-hour update checks and finalizing the background execution workflow.
+**Security Hardening**
 
-### Planned
-
-**Inventory Import**
-
-* CSV imports from multiple sources
-* Additional methods for bulk inventory entry
-
-**Card Entry Tool**
-
-A dedicated card-entry sheet that can query the local database and allow cards to be selected based on search criteria rather than requiring all identifying information to be entered manually.
-
-**Duplicate Consolidation**
-
-A data-processing step that will combine duplicate cards entered into inventory into a single line item and update the quantity accordingly.
-
-**Production Database Monitoring**
-
-The current MTGJSON monitoring system is functional in its test configuration.
-
-Planned production behavior includes:
-
-* Four-hour update checks
-* Automatic database updates
-* Continued background operation
-* Final notification and startup behavior
-* Additional error handling and recovery
-
-**Inventory Valuation**
-
-A complete inventory valuation system using card quantities and current pricing data.
+The backend currently uses localhost-only operation and authenticated local Price Server shutdown. Additional security hardening is planned before the project is considered production-ready.
 
 ## MTGJSON
 
@@ -335,11 +332,11 @@ MTGJSON is used as a local source of structured Magic: The Gathering card data a
 
 The project stores the required MTGJSON databases locally rather than requiring the application to download the complete datasets during normal operation.
 
-The `MTGJSONUpdater` utility checks the remote files for changes and updates the local databases when appropriate.
+The Price Server uses streaming parsing to extract only the card identity and pricing information required by the application.
 
-The `MTGJSONMonitor` periodically checks for changes and coordinates the update process when a new database version is detected.
+The `MTGJSONUpdater` utility handles safe database updates using temporary downloads, gzip validation, and SHA-256 verification.
 
-During the current test phase, the monitor uses a short check interval and forced update detection. The production configuration is intended to check approximately every four hours.
+The `MTGJSONMonitor` provides background update detection and coordinates the update process when a new database version is detected.
 
 ## JustTCG
 
@@ -363,11 +360,27 @@ The solution was to use the TCGplayer Product ID as a cross-source identifier an
 
 This also created a useful audit trail inside Excel, allowing the application to retain the identifiers and returned card information used to verify each live price.
 
+### MTGJSON Memory Optimization
+
+Another significant development challenge was the memory usage of the original MTGJSON loading implementation.
+
+The initial implementation used Python's standard JSON parser to load the complete `AllPrintings.json.gz` and `AllPricesToday.json.gz` documents into memory.
+
+Testing showed that this created substantial memory overhead, with the Price Server reaching approximately 1.8 GB of process memory during database loading.
+
+The problem was addressed by replacing the full-document parsing approach with streaming JSON parsing using `ijson`.
+
+The new implementation processes the compressed JSON incrementally and retains only the data required by the application.
+
+Testing reduced the running Price Server to well under 200 MB while maintaining the same card lookup and pricing functionality.
+
+This required testing the actual MTGJSON structure and resolving an additional issue where card records could be encountered before the corresponding set-name record during streaming. The final implementation temporarily associates cards with their set codes and resolves the human-readable set names after parsing.
+
 ### Automated Database Updates
 
 The next major challenge was moving the MTGJSON update process from a manual utility into an automated background workflow.
 
-The updater itself needed to safely handle large database files without leaving the application with a partially updated database. The solution was to download updates to temporary files, validate the gzip data, verify the SHA-256 hash against MTGJSON's published value, and only replace the existing database after all validation succeeded.
+The updater needed to safely handle large database files without leaving the application with a partially updated database. The solution was to download updates to temporary files, validate the gzip data, verify the SHA-256 hash against MTGJSON's published value, and only replace the existing database after all validation succeeded.
 
 The monitoring system was then built around that updater. The monitor periodically checks MTGJSON for changes and coordinates the update process, Price Server shutdown and restart, and a final health check to confirm that the new databases have loaded successfully.
 
@@ -384,9 +397,10 @@ The implementation was changed to use a registered Windows URI protocol:
 ```text
 mtgjson-monitor://update
 mtgjson-monitor://later
+
 ```
 
-The monitor registers the protocol under the current Windows user and validates incoming URIs before performing any action. This allows Windows notification buttons to invoke the monitor without exposing update functionality directly through the notification library.
+The monitor registers the protocol under the current Windows user and validates incoming URIs before performing any action.
 
 ### Troubleshooting the Notification Buttons
 
@@ -402,11 +416,12 @@ The issue was resolved by separating the notification library's internal applica
 
 ```text
 mtgjson-monitor://
+
 ```
 
 for its own protocol.
 
-This required testing the individual components separately, including direct URI activation, Windows registry registration, notification actions, and the complete update workflow. Once isolated, the underlying Windows URI mechanism was confirmed to be working correctly and the conflict with the notification library was identified as the source of the problem.
+This required testing the individual components separately, including direct URI activation, Windows registry registration, notification actions, and the complete update workflow.
 
 The final system now successfully performs the complete workflow:
 
@@ -439,10 +454,10 @@ Health check
         |
         v
 Update completed
+
 ```
 
 This was the most involved troubleshooting process in the project to date and provided useful experience working with Windows process management, registry-based URI protocols, third-party Python libraries, background processes, and inter-process communication.
-
 
 ## Project Structure
 
@@ -457,6 +472,7 @@ Card Pricing Prototype/
 ├── price_server.py
 ├── start_server.bat
 └── Store - Inventory Test v2.xlsm
+
 ```
 
 Generated databases, compiled executables, debug files, test environments, Python cache files, and local configuration files are excluded from version control.
@@ -469,6 +485,7 @@ Create a copy of `config.ini.example` named:
 
 ```text
 config.ini
+
 ```
 
 Then add your API key:
@@ -476,9 +493,88 @@ Then add your API key:
 ```ini
 [JustTCG]
 api_key=YOUR_JUSTTCG_API_KEY
+
 ```
 
 The actual `config.ini` file is intentionally excluded from Git.
+
+## Quick Start
+
+### Windows
+
+1. Clone or download the repository.
+2. Make sure Python 3 is installed if running the source files directly.
+3. Install the required Python dependencies.
+4. Copy `config.ini.example` to `config.ini`.
+5. Add your JustTCG API key to `config.ini`.
+6. Make sure the required MTGJSON databases are present in the `Data` directory.
+7. Start the application using `start_server.bat`.
+8. Open the Excel workbook when the Price Server reports that it is ready.
+
+For development, the Python components can also be run directly.
+
+The packaged Windows version uses the compiled `MTGJSONUpdater.exe` and `PriceServer.exe` files generated from the included PyInstaller specifications.
+
+### Python Dependencies
+
+The current Python backend requires:
+
+```text
+ijson
+```
+
+Install the required package with:
+
+```text
+pip install ijson
+```
+
+Additional dependencies may be required by the MTGJSON Monitor depending on the notification functionality being used.
+
+### Configuration
+
+Create:
+
+```text
+config.ini
+```
+
+from:
+
+```text
+config.ini.example
+```
+
+Then configure the JustTCG API key:
+
+```ini
+[JustTCG]
+api_key=YOUR_JUSTTCG_API_KEY
+```
+
+The API key is stored outside the Excel workbook and `config.ini` is excluded from version control.
+
+### First Run
+
+The normal startup workflow is:
+
+```text
+start_server.bat
+       |
+       v
+MTGJSON database check
+       |
+       v
+PriceServer starts
+       |
+       v
+/health reports ready
+       |
+       v
+Excel workbook opens
+```
+
+Once the workbook is open, inventory can be entered and pricing requests can be performed through the Excel interface.
 
 ## Running the Project
 
@@ -495,24 +591,26 @@ Python HTTP server
        |
        v
 Excel inventory workbook
+
 ```
 
-The launcher checks the local MTGJSON databases before starting the price server. It then waits for the Python server to report that it is ready before opening the Excel workbook.
+The launcher checks the local MTGJSON databases before starting the Price Server. It then waits for the Python server to report that it is ready before opening the Excel workbook.
 
 The project is designed to be started using `start_server.bat`.
 
 The batch file starts the MTGJSON updater, launches the Price Server, waits for the server to become available, and then opens the Excel workbook.
 
-The compiled `MTGJSONUpdater.exe` and `PriceServer.exe` files are required for `start_server.bat` to run. These executables are generated from the included PyInstaller `.spec` files and are included in the packaged version of the application.
+The compiled `MTGJSONUpdater.exe` and `PriceServer.exe` files are required for the packaged Windows startup workflow. These executables are generated from the included PyInstaller `.spec` files and are not stored in the source repository.
 
-The MTGJSON Monitor is currently being tested separately from the normal startup workflow. During development, the Python source files can be run directly.
+During development, the Python source files can be run directly, or the executables can be rebuilt using the included `.spec` files.
 
-For development, the Python source files can be run directly, or the executables can be rebuilt using the included `.spec` files.
+The MTGJSON Monitor is currently being tested separately from the normal startup workflow.
 
 The Excel workbook communicates with the local Python server through:
 
 ```text
 http://127.0.0.1:5000
+
 ```
 
 ## Why I Built It
@@ -529,19 +627,22 @@ I continue to develop it in my spare time as a way to learn, experiment, and pot
 
 The project will continue to evolve as new ideas and requirements are explored.
 
-Some of the planned development includes:
+Planned development includes:
 
 * CSV inventory imports
 * Database-assisted card entry
 * Duplicate inventory consolidation
-* Four-hour MTGJSON update checks
-* Production automatic database updates
-* Finalize background monitor execution
+* Production four-hour MTGJSON update checks
+* Final background monitor execution
 * Full inventory valuation
 * Additional inventory management functionality
 * Further improvements to the Excel interface
 * Additional pricing and inventory workflows
-* Additional error handling and security hardening
+* Additional error handling
+* JustTCG API key protection using Windows credential protection
+* Additional validation of returned JustTCG variants
+* Review of local inter-process authentication
+* General security review of the Excel-to-Python communication workflow
 
 ## Author
 
@@ -552,4 +653,3 @@ Alec West
 This is an independent personal project and is not affiliated with MTGJSON or JustTCG.
 
 Pricing and card data are provided by external services and may change independently of this project.
-
