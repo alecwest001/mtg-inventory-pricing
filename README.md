@@ -346,6 +346,40 @@ The Python server now handles communication with JustTCG, keeping the API creden
 
 Live pricing requests are matched against the TCGplayer Product ID obtained from MTGJSON before a result is marked as verified.
 
+## Third-Party Data & API Usage
+
+This project's MIT license applies only to original code contained in this repository. Third-party services, APIs, data, trademarks, and other external materials remain subject to their respective licenses and terms.
+
+This project uses third-party data and services from **MTGJSON** and **JustTCG**.
+
+### MTGJSON
+
+MTGJSON provides the card data used by this project, including card identities, set information, identifiers, and related data.
+
+MTGJSON is an open-source project distributed under the MIT License. Use of MTGJSON data and software is subject to the terms of the applicable MTGJSON license.
+
+See the [MTGJSON License](https://www.mtgjson.com/license/) for the current license terms.
+
+### JustTCG
+
+JustTCG provides optional live pricing data through its API.
+
+This project does **not** include or distribute a JustTCG API key. Users must provide and configure their own API credentials.
+
+Use of JustTCG data is subject to the current JustTCG Terms of Service and the subscription tier associated with the user's API account. Users are responsible for ensuring that their use of the JustTCG API complies with the applicable commercial-use, licensing, attribution, rate-limit, and other requirements of their subscription.
+
+This project does not resell or redistribute the JustTCG raw pricing feed and is not intended to operate as a competing pricing API.
+
+See the [JustTCG Terms of Service](https://justtcg.com/terms) and [Commercial Use Guidelines](https://justtcg.com/docs/commercial-use) for the current requirements.
+
+### No Affiliation
+
+This project is an independent, community-developed project and is not affiliated with, endorsed by, or sponsored by MTGJSON, JustTCG, Wizards of the Coast, or TCGplayer.
+
+Third-party names, trademarks, and services remain the property of their respective owners.
+
+**Users are responsible for ensuring that their use of third-party data and APIs complies with the current terms, licenses, and usage limits of those services.**
+
 ## Development Challenge
 
 One of the early challenges of the project was getting the JustTCG API integration working correctly through Power Query in the original Excel implementation.
