@@ -2,8 +2,8 @@ config.ini
 
 Data/
 build/
-dist/
 debug/
+dist/
 
 Test Update Failure/
 Test Update Success/
