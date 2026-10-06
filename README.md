@@ -63,20 +63,21 @@ Windows Toast Notification
     |
     | Update Now
     v
-MTGJSONUpdater
+MTGJSON Updater
     |
     | Successful database update
     v
-PriceServer Restart
+Price Server Restart
     |
     v
 Health Check
-
 ```
 
 The Excel front end handles inventory management and user interaction while the Python backend handles local database access, API communication, cross-source card verification, and database maintenance.
 
 The MTGJSON Monitor runs separately from the Price Server and coordinates database update detection, notifications, updates, and server restarts.
+
+During development, `start_server.bat` acts as a multi-launch development entry point. It allows the application to be started using either the Python source files or compiled executables.
 
 ## Card Identification & Verification
 
@@ -170,7 +171,6 @@ The **Update Now** action uses a registered Windows URI protocol:
 
 ```text
 mtgjson-monitor://update
-
 ```
 
 The monitor validates the URI before performing the requested action.
@@ -196,7 +196,6 @@ PriceServer restart
       |
       v
 PriceServer ready
-
 ```
 
 The monitor waits for the Price Server health endpoint to respond successfully before reporting that the restart has completed.
@@ -209,14 +208,12 @@ The current test interval is approximately:
 
 ```text
 30 seconds
-
 ```
 
 The forced update detection is temporary test functionality. The intended production configuration is approximately:
 
 ```text
 4 hours
-
 ```
 
 The monitor and notification workflow have been tested end-to-end, including:
@@ -310,7 +307,8 @@ The core inventory and pricing workflows are functional. The MTGJSON updater and
 * Authenticated local Price Server shutdown
 * Server health checking
 * PyInstaller build configuration
-* Windows batch startup workflow
+* Location-independent development startup workflow
+* Python source and compiled EXE launch modes
 
 ### In Progress
 
@@ -397,7 +395,6 @@ The implementation was changed to use a registered Windows URI protocol:
 ```text
 mtgjson-monitor://update
 mtgjson-monitor://later
-
 ```
 
 The monitor registers the protocol under the current Windows user and validates incoming URIs before performing any action.
@@ -416,7 +413,6 @@ The issue was resolved by separating the notification library's internal applica
 
 ```text
 mtgjson-monitor://
-
 ```
 
 for its own protocol.
@@ -454,7 +450,6 @@ Health check
         |
         v
 Update completed
-
 ```
 
 This was the most involved troubleshooting process in the project to date and provided useful experience working with Windows process management, registry-based URI protocols, third-party Python libraries, background processes, and inter-process communication.
@@ -465,38 +460,27 @@ This was the most involved troubleshooting process in the project to date and pr
 Card Pricing Prototype/
 ├── .gitignore
 ├── config.ini.example
-├── check_uuid.py
 ├── mtgjson_monitor.py
 ├── MTGJSONUpdater.spec
 ├── PriceServer.spec
 ├── price_server.py
 ├── start_server.bat
-└── Store - Inventory Test v2.xlsm
-
+├── Store - Inventory Test v2.xlsm
+└── debug/
+    ├── check_uuid.py
+    ├── inspect_ijson.py
+    ├── memory_test.py
+    ├── test_ijson.py
+    ├── test_prices.py
+    ├── test_rhystic.py
+    ├── test_set.py
+    ├── test_sol_ring.py
+    └── test_tcgplayerid.py
 ```
 
 Generated databases, compiled executables, debug files, test environments, Python cache files, and local configuration files are excluded from version control.
 
-## Configuration
-
-The Python server requires a JustTCG API key.
-
-Create a copy of `config.ini.example` named:
-
-```text
-config.ini
-
-```
-
-Then add your API key:
-
-```ini
-[JustTCG]
-api_key=YOUR_JUSTTCG_API_KEY
-
-```
-
-The actual `config.ini` file is intentionally excluded from Git.
+The `debug/` directory contains one-off testing, inspection, troubleshooting, and development scripts that are not required by the application during normal operation.
 
 ## Quick Start
 
@@ -509,11 +493,15 @@ The actual `config.ini` file is intentionally excluded from Git.
 5. Add your JustTCG API key to `config.ini`.
 6. Make sure the required MTGJSON databases are present in the `Data` directory.
 7. Start the application using `start_server.bat`.
-8. Open the Excel workbook when the Price Server reports that it is ready.
+8. Select the desired startup mode:
 
-For development, the Python components can also be run directly.
+   * **Python source** to run the development Python files directly.
+   * **Compiled EXEs** to run locally built executables.
+9. The startup process checks the MTGJSON databases, starts the Price Server, waits for the server health check, starts the MTGJSON Monitor, and opens the Excel workbook.
 
-The packaged Windows version uses the compiled `MTGJSONUpdater.exe` and `PriceServer.exe` files generated from the included PyInstaller specifications.
+The source repository does not require compiled executables to run the Python development workflow.
+
+Compiled executables can be generated locally using the included PyInstaller `.spec` files when testing the packaged build.
 
 ### Python Dependencies
 
@@ -529,7 +517,7 @@ Install the required package with:
 pip install ijson
 ```
 
-Additional dependencies may be required by the MTGJSON Monitor depending on the notification functionality being used.
+Additional dependencies are required by the MTGJSON Monitor for its Windows notification functionality.
 
 ### Configuration
 
@@ -556,10 +544,13 @@ The API key is stored outside the Excel workbook and `config.ini` is excluded fr
 
 ### First Run
 
-The normal startup workflow is:
+The normal development startup workflow is:
 
 ```text
 start_server.bat
+       |
+       v
+Select Python source or compiled EXEs
        |
        v
 MTGJSON database check
@@ -571,6 +562,9 @@ PriceServer starts
 /health reports ready
        |
        v
+MTGJSON Monitor starts
+       |
+       v
 Excel workbook opens
 ```
 
@@ -578,39 +572,74 @@ Once the workbook is open, inventory can be entered and pricing requests can be 
 
 ## Running the Project
 
-The intended Windows workflow is:
+The development Windows workflow is:
 
 ```text
 start_server.bat
        |
        v
-MTGJSON database check
+Select startup mode
        |
-       v
-Python HTTP server
-       |
-       v
-Excel inventory workbook
-
+       +--------------------+
+       |                    |
+       v                    v
+Python source          Compiled EXEs
+       |                    |
+       +---------+----------+
+                 |
+                 v
+        MTGJSON database check
+                 |
+                 v
+            PriceServer
+                 |
+                 v
+             /health
+                 |
+                 v
+          MTGJSON Monitor
+                 |
+                 v
+         Excel inventory
+            workbook
 ```
 
-The launcher checks the local MTGJSON databases before starting the Price Server. It then waits for the Python server to report that it is ready before opening the Excel workbook.
+The `start_server.bat` launcher is designed to be location-independent. It uses paths relative to the location of the batch file rather than requiring a specific drive letter or installation directory.
 
-The project is designed to be started using `start_server.bat`.
+This allows the repository to be cloned or moved to different directories and drives without changing the startup configuration.
 
-The batch file starts the MTGJSON updater, launches the Price Server, waits for the server to become available, and then opens the Excel workbook.
+The launcher provides two development modes.
 
-The compiled `MTGJSONUpdater.exe` and `PriceServer.exe` files are required for the packaged Windows startup workflow. These executables are generated from the included PyInstaller `.spec` files and are not stored in the source repository.
+**Python source mode**
 
-During development, the Python source files can be run directly, or the executables can be rebuilt using the included `.spec` files.
+Runs the Python source files directly:
 
-The MTGJSON Monitor is currently being tested separately from the normal startup workflow.
+```text
+update_mtgjson.py
+price_server.py
+mtgjson_monitor.py
+```
+
+**Compiled EXE mode**
+
+Runs locally built executables when they are available:
+
+```text
+MTGJSONUpdater.exe
+PriceServer.exe
+MTGJSONMonitor.exe
+```
+
+The compiled executables are development/build artifacts and are not required when using Python source mode.
+
+The launcher performs the initial MTGJSON database check before starting the Price Server. It then waits for the Price Server health endpoint to report that the server is ready before starting the MTGJSON Monitor and opening the Excel workbook.
+
+During development, the Python source files can also be run individually when troubleshooting specific components.
 
 The Excel workbook communicates with the local Python server through:
 
 ```text
 http://127.0.0.1:5000
-
 ```
 
 ## Why I Built It
@@ -643,6 +672,8 @@ Planned development includes:
 * Additional validation of returned JustTCG variants
 * Review of local inter-process authentication
 * General security review of the Excel-to-Python communication workflow
+* Dedicated application launcher to replace the development batch workflow
+* Cross-platform application architecture
 
 ## Author
 
